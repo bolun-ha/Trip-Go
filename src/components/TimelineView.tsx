@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trip, Place } from '../types';
-import { CheckCircle2, Circle, Clock, MapPin, Navigation, Calendar, RefreshCcw, Loader2, Star } from 'lucide-react';
+import { CheckCircle2, Circle, Clock, MapPin, Navigation, Calendar, RefreshCcw, Loader2, Camera, Image as ImageIcon, Share2 } from 'lucide-react';
 import { getAlternatives } from '../services/deepSeekService';
 import { openGaodeNavigation } from '../services/navigationService';
 import { PlaceImage } from './PlaceImage';
+import { uploadPhoto, getPhotos, deletePhoto, type StoredPhoto } from '../services/photoService';
+import { ShareCard } from './ShareCard';
 
 /** 从 timeSlot（如 "09:00 - 11:00"）解析出开始时间的分钟数 */
 const parseStartMinutes = (timeSlot: string): number => {
@@ -48,10 +50,72 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
   const now = new Date();
   const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
+  // 模式切换
+  const [photoMode, setPhotoMode] = useState(false);
+
   // 换个地方状态
   const [swapPlace, setSwapPlace] = useState<{ place: Place; dayIdx: number } | null>(null);
   const [alternatives, setAlternatives] = useState<any[]>([]);
   const [loadingAlts, setLoadingAlts] = useState(false);
+
+  // 照片模式：展开的卡片 id
+  const [photoExpandedId, setPhotoExpandedId] = useState<string | null>(null);
+
+  // 照片状态
+  const [storedPhotos, setStoredPhotos] = useState<Record<string, StoredPhoto[]>>({});
+  const [uploading, setUploading] = useState<string | null>(null);
+  const [selectedPhotos, setSelectedPhotos] = useState<Record<string, boolean>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadTarget, setUploadTarget] = useState<string | null>(null);
+
+  // 加载当前天的所有照片
+  const dayIndex = getCurrentDayIndex(trip);
+  const today = trip ? trip.days[dayIndex] : null;
+
+  useEffect(() => {
+    if (!today || !photoMode) return;
+    today.places.forEach(async (place) => {
+      const photos = await getPhotos(place.id);
+      if (photos.length > 0) {
+        setStoredPhotos(prev => ({ ...prev, [place.id]: photos }));
+      }
+    });
+  }, [today, photoMode]);
+
+  /** 上传照片 */
+  const handleUpload = async (placeId: string, file: File) => {
+    setUploading(placeId);
+    try {
+      const photo = await uploadPhoto(placeId, file);
+      setStoredPhotos(prev => ({
+        ...prev,
+        [placeId]: [...(prev[placeId] || []), photo],
+      }));
+    } catch (err: any) {
+      alert(err.message || '上传失败');
+    } finally {
+      setUploading(null);
+      setUploadTarget(null);
+    }
+  };
+
+  const handleDelete = async (placeId: string) => {
+    const ids = Object.keys(selectedPhotos).filter(id => selectedPhotos[id]);
+    if (ids.length === 0) return;
+    if (!confirm('确定删除选中的 ' + ids.length + ' 张照片？')) return;
+
+    try {
+      await Promise.all(ids.map(id => deletePhoto(id)));
+      setStoredPhotos(prev => ({
+        ...prev,
+        [placeId]: (prev[placeId] || []).filter(p => !selectedPhotos[p.id]),
+      }));
+      setSelectedPhotos({});
+    } catch (err) {
+      console.error('Delete failed:', err);
+      alert('删除失败');
+    }
+  };
 
   if (!trip) return (
     <div className="flex flex-col items-center justify-center h-full px-12 text-center text-gray-400 py-20">
@@ -59,8 +123,6 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
       <p>开始一次旅行后，这里将显示实时进度</p>
     </div>
   );
-
-  const dayIndex = getCurrentDayIndex(trip);
 
   if (dayIndex === -1) {
     const startDate = trip.startDate
@@ -79,8 +141,7 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
     );
   }
 
-  const today = trip.days[dayIndex];
-  const currentPlaceIndex = findCurrentPlaceIndex(today.places);
+  const currentPlaceIndex = findCurrentPlaceIndex(today!.places);
 
   /** 换个地方：加载备选 */
   const handleSwap = async (place: Place, idx: number) => {
@@ -121,16 +182,48 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
 
   return (
     <div className="bg-white p-8 min-h-full">
+      {/* 隐藏的文件输入框 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file && uploadTarget) {
+            handleUpload(uploadTarget, file);
+          }
+          e.target.value = '';
+        }}
+      />
+
       <div className="flex items-center justify-between mb-10">
         <div>
-          <h2 className="text-2xl font-bold text-[#1A1A1A]">实时路线</h2>
+          <h2 className="text-2xl font-bold text-[#1A1A1A]">
+            {photoMode ? '照片记录' : '实时路线'}
+          </h2>
           <p className="text-xs text-gray-400 font-medium uppercase tracking-widest mt-1">
             {trip.destination} · Day {dayIndex + 1} · {currentTime}
           </p>
         </div>
-        <div className="flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-100">
-          <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-          <span className="text-[10px] font-bold text-green-700 uppercase tracking-tighter">实时同步</span>
+        <div className="flex items-center gap-3">
+          {/* 模式切换按钮 */}
+          <button
+            onClick={() => setPhotoMode(!photoMode)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all ${
+              photoMode
+                ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                : 'bg-white text-gray-400 border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            <ImageIcon size={14} />
+            照片
+          </button>
+          {/* 实时同步指示器 */}
+          <div className="flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-100">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            <span className="text-[10px] font-bold text-green-700 uppercase tracking-tighter">实时同步</span>
+          </div>
         </div>
       </div>
 
@@ -138,10 +231,11 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
         <div className="absolute left-[11px] top-2 bottom-2 w-0.5 bg-gray-100" />
 
         <div className="space-y-12">
-          {today.places.map((place, idx) => {
+          {today!.places.map((place, idx) => {
             const status = getPlaceStatus(idx, currentPlaceIndex);
             const isCompleted = status === 'completed';
             const isCurrent = status === 'current';
+            const placePhotos = storedPhotos[place.id] || [];
 
             return (
               <div key={place.id} className="relative pl-10">
@@ -157,15 +251,28 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
                   )}
                 </div>
 
-                <div className={`p-5 rounded-2xl border transition-all ${
-                  isCurrent 
-                    ? 'border-blue-600 bg-white minimalism-shadow scale-[1.02]' 
-                    : isCompleted 
-                      ? 'border-gray-50 bg-gray-50/50 opacity-60' 
-                      : 'border-gray-100 bg-white'
-                }`}>
+                <div
+                  className={`p-5 rounded-2xl border transition-all cursor-pointer ${
+                    photoMode
+                      ? 'border-gray-100 bg-white hover:border-blue-200'
+                      : isCurrent 
+                        ? 'border-blue-600 bg-white minimalism-shadow scale-[1.02]' 
+                        : isCompleted 
+                          ? 'border-gray-50 bg-gray-50/50 opacity-60' 
+                          : 'border-gray-100 bg-white'
+                  }`}
+                  onClick={() => {
+                    if (photoMode) {
+                      setPhotoExpandedId(photoExpandedId === place.id ? null : place.id);
+                      setSelectedPhotos({});
+                    }
+                  }}
+                >
                   <div className="flex gap-3 items-start">
-                    {!isCompleted && <PlaceImage placeName={place.name} city={trip.destination} size="sm" className="mt-0.5 flex-shrink-0" />}
+                    {/* 非照片模式 & 未完成：显示缩略图 */}
+                    {!photoMode && !isCompleted && (
+                      <PlaceImage placeName={place.name} city={trip.destination} size="sm" className="mt-0.5 flex-shrink-0" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-start mb-2">
                         <span className={`text-[10px] font-bold uppercase tracking-widest ${
@@ -186,8 +293,80 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
                       <p className="text-sm text-gray-500 mb-4 line-clamp-2 leading-relaxed">
                         {place.description}
                       </p>
-                      
-                      {isCurrent && (
+
+                      {/* 照片模式：展开后才显示照片 */}
+                      {photoMode && photoExpandedId === place.id && placePhotos.length > 0 && (
+                        <div className="flex gap-1.5 mb-3 overflow-x-auto flex-wrap">
+                          {placePhotos.map((p, pi) => (
+                            <div
+                              key={p.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedPhotos(prev => ({
+                                  ...prev,
+                                  [p.id]: !prev[p.id],
+                                }));
+                              }}
+                              className={'w-14 h-14 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100 border border-gray-100 relative cursor-pointer transition-all duration-150 select-none ' + (selectedPhotos[p.id] ? 'ring-2 ring-red-500 opacity-75 scale-95' : '')}
+                              style={{ touchAction: 'manipulation' }}
+                            >
+                              <img src={p.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                              {selectedPhotos[p.id] && (
+                                <div className="absolute top-0.5 right-0.5 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center">
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 照片模式：展开后才显示按钮 */}
+                      {photoMode && photoExpandedId === place.id && (
+                        <div className="flex gap-2 justify-end border-t border-gray-100 pt-4 mt-2">
+                          {Object.keys(selectedPhotos).filter(k => selectedPhotos[k]).length > 0 ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(place.id);
+                              }}
+                              className="w-auto px-5 py-3 rounded-xl bg-red-50 text-red-600 font-bold text-[11px] uppercase tracking-wide flex items-center justify-center gap-1.5 hover:bg-red-100 transition-colors border border-red-100"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                              删除 {Object.keys(selectedPhotos).filter(k => selectedPhotos[k]).length} 张
+                            </button>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUploadTarget(place.id);
+                                fileInputRef.current?.click();
+                              }}
+                              disabled={uploading === place.id}
+                              className="w-auto px-5 py-3 rounded-xl bg-blue-600 text-white font-bold text-[11px] uppercase tracking-wide shadow-lg shadow-blue-100 flex items-center justify-center gap-1.5 disabled:opacity-50"
+                            >
+                              {uploading === place.id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <Camera size={14} />
+                              )}
+                              上传照片
+                            </button>
+                          )}
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <ShareCard
+                              placeName={place.name}
+                              dayLabel={`Day ${dayIndex + 1}`}
+                              address={place.address}
+                              description={place.description}
+                              photos={placePhotos.map(p => p.dataUrl)}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 非照片模式：原有操作按钮 */}
+                      {!photoMode && isCurrent && (
                         <div className="flex gap-2 border-t border-gray-100 pt-4 mt-2">
                           <button
                             onClick={() => openGaodeNavigation(place)}
@@ -213,7 +392,7 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
       </div>
 
       {/* 所有景点都结束了 */}
-      {currentPlaceIndex >= today.places.length - 1 && currentPlaceIndex !== -1 && (
+      {currentPlaceIndex >= today!.places.length - 1 && currentPlaceIndex !== -1 && (
         <div className="mt-8 text-center py-4 bg-blue-50 rounded-2xl border border-blue-100">
           <p className="text-sm font-bold text-blue-700">
             🎉 今日行程全部完成！
