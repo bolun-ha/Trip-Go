@@ -237,10 +237,10 @@ export const HomeView = ({
 
   return (
     <div className="flex flex-col h-full bg-white relative">
-      {/* Chat Area */}
+      {/* Chat Area — 底部留空给固定输入区 */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-6 py-6 space-y-6 scroll-smooth"
+        className="flex-1 overflow-y-auto px-6 py-6 pb-44 space-y-6 scroll-smooth"
       >
         <AnimatePresence initial={false}>
           {messages.map((msg) => (
@@ -475,9 +475,10 @@ export const HomeView = ({
         </AnimatePresence>
       </div>
 
-      {/* Input Area */}
-      <div className="p-6 bg-white border-t border-gray-100">
-        <div className="flex gap-2 mb-4 overflow-x-auto pb-2 scrollbar-hide">
+      {/* Input Area — 固定在底部（白色底板延伸到 nav，防止镂空漏出） */}
+      <div className="fixed left-1/2 -translate-x-1/2 bottom-0 z-30 w-full max-w-md bg-white">
+        <div className="p-6 pb-0 border-t border-gray-100">
+          <div className="flex gap-2 mb-4 overflow-x-auto pb-2 scrollbar-hide">
           <div className="flex items-center gap-2 flex-nowrap">
             {templates.map((t) => (
               <button
@@ -512,6 +513,9 @@ export const HomeView = ({
           </button>
         </div>
       </div>
+      {/* 白色底板填满导航栏区域，防止滚动时漏出 */}
+      <div className="h-20 bg-white"></div>
+    </div>
     </div>
   );
 };
