@@ -183,26 +183,48 @@ const AMapRouteStatic = ({ places }: { places: Place[] }) => {
     });
     map.add(mainPolyline);
 
-    // ── 2. 自定义徽章标记 ──
+    // ── 2. 自定义徽章标记（默认只显示字母圆点，点击展开名称） ──
     const markers = validPlaces.map((p, i) => {
       const label = String.fromCharCode(65 + i);
+      var isExpanded = false;
+
+      // 折叠态：带字母的圆点
+      const dot = document.createElement('div');
+      dot.style.cssText =
+        'width:22px;height:22px;border-radius:50%;background:#3B82F6;' +
+        'color:#fff;display:flex;align-items:center;justify-content:center;' +
+        'font-weight:700;font-size:11px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.2);' +
+        'line-height:22px;user-select:none;';
+      dot.textContent = label;
+
+      // 展开态：圆点 + 名称
       const badge = document.createElement('div');
       badge.style.cssText =
         'display:flex;align-items:center;gap:5px;background:#fff;border-radius:8px;' +
-        'padding:3px 10px 3px 3px;box-shadow:0 2px 8px rgba(0,0,0,0.1);' +
-        'font-size:12px;white-space:nowrap;cursor:default;';
+        'padding:3px 10px 3px 3px;box-shadow:0 2px 8px rgba(0,0,0,0.15);' +
+        'font-size:12px;white-space:nowrap;cursor:pointer;user-select:none;';
       badge.innerHTML =
-        `<div style="width:20px;height:20px;border-radius:50%;background:#3B82F6;` +
+        `<div style="width:22px;height:22px;border-radius:50%;background:#3B82F6;` +
         `color:#fff;display:flex;align-items:center;justify-content:center;` +
-        `font-weight:700;font-size:10px;flex-shrink:0;">${label}</div>` +
+        `font-weight:700;font-size:11px;flex-shrink:0;line-height:22px;">${label}</div>` +
         `<span style="color:#374151;font-weight:500;">${p.name}</span>`;
 
       const marker = new AMap.Marker({
         position: [p.coordinates.lng, p.coordinates.lat],
-        content: badge,
-        offset: new AMap.Pixel(0, -12),
+        content: dot,
+        offset: new AMap.Pixel(0, -11),
         zIndex: 100,
       });
+
+      // 直接在内容元素上绑定点击，更可靠
+      const toggle = function () {
+        isExpanded = !isExpanded;
+        marker.setContent(isExpanded ? badge : dot);
+        marker.setzIndex(isExpanded ? 200 : 100);
+      };
+      dot.onclick = toggle;
+      badge.onclick = toggle;
+
       map.add(marker);
       return marker;
     });
