@@ -10,6 +10,8 @@ export default defineConfig(({mode}) => {
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(process.env.GEMINI_API_KEY || env.GEMINI_API_KEY),
       'process.env.VITE_AMAP_API_KEY': JSON.stringify(process.env.VITE_AMAP_API_KEY || env.VITE_AMAP_API_KEY),
+      'process.env.VITE_AMAP_SECURITY_CODE': JSON.stringify(process.env.VITE_AMAP_SECURITY_CODE || env.VITE_AMAP_SECURITY_CODE),
+      'process.env.VITE_AMAP_REST_API_KEY': JSON.stringify(process.env.VITE_AMAP_REST_API_KEY || env.VITE_AMAP_REST_API_KEY),
     },
     resolve: {
       alias: {

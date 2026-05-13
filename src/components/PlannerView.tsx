@@ -30,7 +30,7 @@ const AMapStatic = ({ name, address, coordinates }: {
   address: string; 
   coordinates?: { lat: number; lng: number };
 }) => {
-  const apiKey = (import.meta as any).env.VITE_AMAP_API_KEY || 'ea8a3819398b2b0bf019713046d0e222';
+  const apiKey = (import.meta as any).env.VITE_AMAP_REST_API_KEY || (import.meta as any).env.VITE_AMAP_API_KEY || 'c307f0eba5e63f4c4dfba0b9c4838655';
   
   // 如果有坐标，直接使用；否则使用默认坐标（北京）
   const lng = coordinates?.lng || 116.4074;
@@ -64,7 +64,7 @@ const AMapStatic = ({ name, address, coordinates }: {
 
 /** 天级路线地图：使用高德 JS API 交互地图连点成线 */
 const AMapRouteStatic = ({ places }: { places: Place[] }) => {
-  const apiKey = (import.meta as any).env.VITE_AMAP_API_KEY || 'ea8a3819398b2b0bf019713046d0e222';
+  const apiKey = (import.meta as any).env.VITE_AMAP_API_KEY || 'c307f0eba5e63f4c4dfba0b9c4838655';
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const [loaded, setLoaded] = useState(false);
@@ -81,6 +81,10 @@ const AMapRouteStatic = ({ places }: { places: Place[] }) => {
   // 加载 AMap JS API
   useEffect(() => {
     if (typeof window !== 'undefined' && !(window as any).AMap && !error) {
+      // 设置安全密钥（2021年12月后申请 key 必须）
+      (window as any)._AMapSecurityConfig = {
+        securityJsCode: (import.meta as any).env.VITE_AMAP_SECURITY_CODE || '0be85c12000dea13aec1b74282135003',
+      };
       const script = document.createElement('script');
       script.src = `https://webapi.amap.com/maps?v=2.0&key=${apiKey}`;
       script.async = true;
@@ -148,8 +152,7 @@ const AMapRouteStatic = ({ places }: { places: Place[] }) => {
     const map = new AMap.Map(mapRef.current, {
       center: coords[0],
       zoom: 13,
-      mapStyle: 'amap://styles/light',
-      layers: [new AMap.TileLayer()],
+      viewMode: '2D',
       resizeEnable: true,
     });
     mapInstanceRef.current = map;
@@ -258,6 +261,7 @@ const AMapRouteStatic = ({ places }: { places: Place[] }) => {
       <div className="relative" style={{ height: '220px' }}>
         {/* 地图容器 */}
         <div ref={mapRef} className="w-full h-full" />
+        <style>{`.amap-logo, .amap-copyright { display: none !important; }`}</style>
 
         {/* 加载中 */}
         {!loaded && !error && (
@@ -306,7 +310,7 @@ const ShareModal = ({ trip, onClose }: { trip: Trip; onClose: () => void }) => {
       try {
         await navigator.share({
           title: `我的 ${trip.destination} 旅行计划`,
-          text: `快来看看我用去哪玩 AI 生成的 ${trip.destination} 行程！`,
+          text: `快来看看我用 Goni AI 生成的 ${trip.destination} 行程！`,
           url: shareUrl,
         });
       } catch (err) {
@@ -419,7 +423,7 @@ const ShareModal = ({ trip, onClose }: { trip: Trip; onClose: () => void }) => {
         >
           <div className="bg-white rounded-[24px] p-8 mb-6 shadow-sm border border-[#F3F4F6]">
             <div className="flex items-center gap-2 text-[#2563EB] font-black tracking-tight mb-4">
-               去哪玩 <span className="text-[#D1D5DB] font-light ml-1">/ TRIP AI</span>
+               Goni <span className="text-[#D1D5DB] font-light ml-1">/ TRIP AI</span>
             </div>
             <h1 className="text-4xl font-black text-[#1A1A1A] mb-2 leading-tight">{trip.destination}</h1>
             <p className="text-sm text-[#9CA3AF] font-bold uppercase tracking-widest">{trip.duration}天深度探索之旅</p>
@@ -1119,7 +1123,7 @@ export const PlannerView = ({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-              className="w-full max-w-md bg-white rounded-t-3xl shadow-2xl relative z-20 overflow-hidden"
+              className="w-full max-w-md bg-white rounded-t-3xl shadow-2xl relative z-20 overflow-y-auto max-h-[90vh] overscroll-contain"
             >
               <div className="h-64 bg-gray-100 relative">
                 <PlaceImage placeName={selectedPlace.name} city={trip?.destination} size="lg" className="w-full h-64" />

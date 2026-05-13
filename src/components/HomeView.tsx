@@ -210,9 +210,37 @@ export const HomeView = ({
     setInput('');
     setLatestUserInput(userInput);
 
+    // 判断是否已有行程（消息中有 trip 对象或 hasExistingTrip）
+    var hasTrip = hasExistingTrip || messages.some(function (m) { return !!m.trip; });
+
     // 本地解析输入
-    const parsed = parseTripInput(userInput);
+    var parsed = parseTripInput(userInput);
     
+    // 已存在行程且输入没有明确的新目的地 → 追问模式，跳过表单
+    var hasNewDest = !!(parsed.destination && parsed.destination.length >= 2);
+    if (hasTrip && !hasNewDest) {
+      // 尝试从已有行程中提取目的地
+      var existingDest = '';
+      var existingDays = 0;
+      for (var mi = messages.length - 1; mi >= 0; mi--) {
+        var m = messages[mi];
+        if (m.trip && m.trip.destination) {
+          existingDest = m.trip.destination;
+          existingDays = m.trip.duration || 3;
+          break;
+        }
+      }
+      var mergeForm: TripFormData = {
+        destination: existingDest || parsed.destination || '',
+        days: parsed.days || existingDays || 3,
+        placesPerDay: parsed.placesPerDay || 4,
+        startTime: parsed.startTime || '09:00',
+        endTime: parsed.endTime || '18:00',
+      };
+      await handleGenerateTrip(mergeForm, userInput, updatedMessages);
+      return;
+    }
+
     if (isFormComplete(parsed)) {
       // 信息完整，直接生成
       const completeForm = fillDefaults(parsed);

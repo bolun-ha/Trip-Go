@@ -50,11 +50,11 @@ export default function App() {
 
   const getTitle = () => {
     switch(view) {
-      case 'home': return '去哪玩';
+      case 'home': return 'Goni';
       case 'planner': return '特别行程';
       case 'timeline': return '实时动态';
       case 'preferences': return '个性偏好';
-      default: return '去哪玩';
+      default: return 'Goni';
     }
   };
 

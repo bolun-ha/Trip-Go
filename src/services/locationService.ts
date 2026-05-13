@@ -37,7 +37,7 @@ export async function getCurrentLocation(): Promise<LocationInfo> {
         let province = '';
         
         try {
-          const apiKey = (import.meta as any).env.VITE_AMAP_API_KEY || 'ea8a3819398b2b0bf019713046d0e222';
+          const apiKey = (import.meta as any).env.VITE_AMAP_REST_API_KEY || (import.meta as any).env.VITE_AMAP_API_KEY || 'ea8a3819398b2b0bf019713046d0e222';
           const response = await fetch(
             `https://restapi.amap.com/v3/geocode/regeo?location=${longitude},${latitude}&key=${apiKey}`
           );
