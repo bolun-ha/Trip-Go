@@ -615,7 +615,7 @@ export const ShareCard = function ({ placeName, dayLabel, address, description, 
     var nowStr = new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
     ctx.fillText('DATE: ' + nowStr, pad.left * S, bottomY);
     ctx.font = '400 ' + (9 * S) + 'px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif';
-    ctx.fillText(address || 'Goni · 旅行助手', pad.left * S, bottomY + 18 * S);
+    ctx.fillText(address || 'Travoo · 旅行助手', pad.left * S, bottomY + 18 * S);
 
     // 右：EXPLORE 徽章
     var badge = 'EXPLORE';
@@ -827,7 +827,7 @@ export const ShareCard = function ({ placeName, dayLabel, address, description, 
           <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
             <div style={{ fontSize: 9, color: '#999', fontFamily: 'SF Mono, Monaco, Consolas, monospace', letterSpacing: 1, lineHeight: 1.8 }}>
               <div style={{ marginBottom: 2 }}>DATE: {new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })}</div>
-              <div>{address || 'Goni · 旅行助手'}</div>
+              <div>{address || 'Travoo · 旅行助手'}</div>
             </div>
             <div
               style={{

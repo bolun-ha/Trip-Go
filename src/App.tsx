@@ -14,7 +14,14 @@ import { LocationInfo } from './services/locationService';
 
 export default function App() {
   const [view, setView] = useState<ViewState>('home');
-  const [trip, setTrip] = useState<Trip | null>(null);
+  const [trip, setTrip] = useState<Trip | null>(() => {
+    try {
+      const saved = localStorage.getItem('current_trip');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [userLocation, setUserLocation] = useState<LocationInfo | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences>(() => {
     const saved = localStorage.getItem('trip_preferences');
@@ -50,11 +57,11 @@ export default function App() {
 
   const getTitle = () => {
     switch(view) {
-      case 'home': return 'Goni';
+      case 'home': return 'Travoo';
       case 'planner': return '特别行程';
       case 'timeline': return '实时动态';
       case 'preferences': return '个性偏好';
-      default: return 'Goni';
+      default: return 'Travoo';
     }
   };
 

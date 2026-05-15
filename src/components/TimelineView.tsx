@@ -15,6 +15,13 @@ const parseStartMinutes = (timeSlot: string): number => {
   return parseInt(match[1]) * 60 + parseInt(match[2]);
 };
 
+/** 从 timeSlot（如 "09:00 - 11:00"）解析出结束时间的分钟数 */
+const parseEndMinutes = (timeSlot: string): number => {
+  const match = timeSlot.match(/-(\s*\d{1,2}):(\d{2})/);
+  if (!match) return 1440; // 找不到结束时间则默认次日凌晨
+  return parseInt(match[1]) * 60 + parseInt(match[2]);
+};
+
 /** 根据当前时间计算在第几个景点 */
 const findCurrentPlaceIndex = (places: Place[]): number => {
   const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
@@ -53,6 +60,9 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
   // 模式切换
   const [photoMode, setPhotoMode] = useState(false);
 
+  // 心跳刷新：旅行期间每 60 秒自动重新计算当前天/景点
+  const [, forceUpdate] = useState(0);
+
   // 换个地方状态
   const [swapPlace, setSwapPlace] = useState<{ place: Place; dayIdx: number } | null>(null);
   const [alternatives, setAlternatives] = useState<any[]>([]);
@@ -71,6 +81,13 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
   // 加载当前天的所有照片
   const dayIndex = getCurrentDayIndex(trip);
   const today = trip ? trip.days[dayIndex] : null;
+
+  // 心跳定时刷新：旅行期间每 60s 重新计算当前天/景点
+  useEffect(() => {
+    if (!trip || dayIndex < 0) return; // 旅行还没开始，不用心跳
+    const id = setInterval(() => forceUpdate(n => n + 1), 60000);
+    return () => clearInterval(id);
+  }, [trip, dayIndex]);
 
   useEffect(() => {
     if (!today || !photoMode) return;
@@ -222,7 +239,7 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
           {/* 实时同步指示器 */}
           <div className="flex items-center gap-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-100">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            <span className="text-[10px] font-bold text-green-700 uppercase tracking-tighter">实时同步</span>
+            <span className="text-[10px] font-bold text-green-700 uppercase tracking-tighter">{currentTime}</span>
           </div>
         </div>
       </div>
@@ -391,19 +408,23 @@ export const TimelineView = ({ trip, onTripUpdated }: { trip: Trip | null; onTri
         </div>
       </div>
 
-      {/* 所有景点都结束了 */}
-      {currentPlaceIndex >= today!.places.length - 1 && currentPlaceIndex !== -1 && (
-        <div className="mt-8 text-center py-4 bg-blue-50 rounded-2xl border border-blue-100">
-          <p className="text-sm font-bold text-blue-700">
-            🎉 今日行程全部完成！
-          </p>
-          {dayIndex < trip.days.length - 1 && (
-            <p className="text-xs text-blue-500 mt-1">
-              明天还有 Day {dayIndex + 2} 的精彩行程等着你
+      {/* 所有景点都结束了（超过最后一个景点的结束时间后才显示） */}
+      {currentPlaceIndex >= today!.places.length - 1 && currentPlaceIndex !== -1 && (() => {
+        const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+        const lastEnd = parseEndMinutes(today!.places[today!.places.length - 1].timeSlot);
+        return nowMinutes >= lastEnd ? (
+          <div className="mt-8 text-center py-4 bg-blue-50 rounded-2xl border border-blue-100">
+            <p className="text-sm font-bold text-blue-700">
+              🎉 今日行程全部完成！
             </p>
-          )}
-        </div>
-      )}
+            {dayIndex < trip.days.length - 1 && (
+              <p className="text-xs text-blue-500 mt-1">
+                明天还有 Day {dayIndex + 2} 的精彩行程等着你
+              </p>
+            )}
+          </div>
+        ) : null;
+      })()}
 
       {/* 换个地方 弹窗 */}
       <AnimatePresence>

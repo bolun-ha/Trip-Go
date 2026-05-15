@@ -40,6 +40,8 @@ export interface Trip {
   destination: string;
   duration: number;
   startDate?: string;
+  startPoint?: string;
+  endPoint?: string;
   days: DayPlan[];
 }
 

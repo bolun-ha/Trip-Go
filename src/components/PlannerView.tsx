@@ -63,7 +63,7 @@ const AMapStatic = ({ name, address, coordinates }: {
 };
 
 /** 天级路线地图：使用高德 JS API 交互地图连点成线 */
-const AMapRouteStatic = ({ places }: { places: Place[] }) => {
+const AMapRouteStatic = ({ places, startCoord, endCoord }: { places: Place[]; startCoord?: [number, number] | null; endCoord?: [number, number] | null }) => {
   const apiKey = (import.meta as any).env.VITE_AMAP_API_KEY || 'c307f0eba5e63f4c4dfba0b9c4838655';
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -256,9 +256,90 @@ const AMapRouteStatic = ({ places }: { places: Place[] }) => {
       map.add(endDot);
     }
 
+    // ── 4. 起止点标记：用高德地理编码 API 确定的真实位置在地图标记 ──
+    const extraMarkers: any[] = [];
+    if (validPlaces.length >= 1) {
+      if (startCoord) {
+        const first = coords[0];
+        // 优先使用地理编码得到的坐标，无则用偏移兜底
+        const spPos = startCoord || (() => {
+          const second = coords[1] || first;
+          const a = Math.atan2(second[1] - first[1], second[0] - first[0]);
+          return [first[0] - Math.cos(a) * 0.0025, first[1] - Math.sin(a) * 0.0025];
+        })();
+
+        const spDot = document.createElement('div');
+        spDot.style.cssText =
+          'width:22px;height:22px;border-radius:50%;background:#9CA3AF;' +
+          'color:#fff;display:flex;align-items:center;justify-content:center;' +
+          'font-weight:700;font-size:10px;cursor:default;box-shadow:0 1px 4px rgba(0,0,0,0.2);' +
+          'line-height:22px;user-select:none;';
+        spDot.textContent = '起';
+
+        const spMarker = new AMap.Marker({
+          position: spPos,
+          content: spDot,
+          offset: new AMap.Pixel(0, -11),
+          zIndex: 101,
+        });
+        map.add(spMarker);
+        extraMarkers.push(spMarker);
+
+        // 起点 → 第一个景点虚线
+        map.add(new AMap.Polyline({
+          path: [spPos, first],
+          strokeColor: '#9CA3AF',
+          strokeWeight: 1.5,
+          strokeOpacity: 0.35,
+          strokeStyle: 'dashed',
+          lineJoin: 'round',
+          lineCap: 'round',
+        }));
+      }
+
+      if (endCoord) {
+        const last = coords[coords.length - 1];
+        // 优先使用地理编码得到的坐标，无则用偏移兜底
+        const epPos = endCoord || (() => {
+          const prev = coords[coords.length - 2] || last;
+          const a = Math.atan2(last[1] - prev[1], last[0] - prev[0]);
+          return [last[0] + Math.cos(a) * 0.0025, last[1] + Math.sin(a) * 0.0025];
+        })();
+
+        const epDot = document.createElement('div');
+        epDot.style.cssText =
+          'width:22px;height:22px;border-radius:50%;background:#9CA3AF;' +
+          'color:#fff;display:flex;align-items:center;justify-content:center;' +
+          'font-weight:700;font-size:10px;cursor:default;box-shadow:0 1px 4px rgba(0,0,0,0.2);' +
+          'line-height:22px;user-select:none;';
+        epDot.textContent = '终';
+
+        const epMarker = new AMap.Marker({
+          position: epPos,
+          content: epDot,
+          offset: new AMap.Pixel(0, -11),
+          zIndex: 101,
+        });
+        map.add(epMarker);
+        extraMarkers.push(epMarker);
+
+        // 最后一个景点 → 终点虚线
+        map.add(new AMap.Polyline({
+          path: [last, epPos],
+          strokeColor: '#9CA3AF',
+          strokeWeight: 1.5,
+          strokeOpacity: 0.35,
+          strokeStyle: 'dashed',
+          lineJoin: 'round',
+          lineCap: 'round',
+        }));
+      }
+    }
+
     // 自适应显示所有标记
+    const fitTargets = [...markers, ...extraMarkers];
     map.setFitView(
-      validPlaces.length > 5 ? markers.slice(0, 10) : markers,
+      fitTargets.length > 5 ? fitTargets.slice(0, 15) : fitTargets,
       false,
       [40, 40, 40, 40]
     );
@@ -269,14 +350,9 @@ const AMapRouteStatic = ({ places }: { places: Place[] }) => {
         mapInstanceRef.current = null;
       }
     };
-  }, [loaded, validPlaces]);
+  }, [loaded, validPlaces, startCoord, endCoord]);
 
-  if (validPlaces.length < 2) {
-    if (validPlaces.length === 1) {
-      return <AMapStatic name={validPlaces[0].name} address="" coordinates={validPlaces[0].coordinates} />;
-    }
-    return null;
-  }
+  if (validPlaces.length < 1) return null;
 
   return (
     <div className="w-full overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
@@ -332,7 +408,7 @@ const ShareModal = ({ trip, onClose }: { trip: Trip; onClose: () => void }) => {
       try {
         await navigator.share({
           title: `我的 ${trip.destination} 旅行计划`,
-          text: `快来看看我用 Goni AI 生成的 ${trip.destination} 行程！`,
+          text: `快来看看我用 Travoo AI 生成的 ${trip.destination} 行程！`,
           url: shareUrl,
         });
       } catch (err) {
@@ -445,7 +521,7 @@ const ShareModal = ({ trip, onClose }: { trip: Trip; onClose: () => void }) => {
         >
           <div className="bg-white rounded-[24px] p-8 mb-6 shadow-sm border border-[#F3F4F6]">
             <div className="flex items-center gap-2 text-[#2563EB] font-black tracking-tight mb-4">
-               Goni <span className="text-[#D1D5DB] font-light ml-1">/ TRIP AI</span>
+               Travoo <span className="text-[#D1D5DB] font-light ml-1">/ TRIP AI</span>
             </div>
             <h1 className="text-4xl font-black text-[#1A1A1A] mb-2 leading-tight">{trip.destination}</h1>
             <p className="text-sm text-[#9CA3AF] font-bold uppercase tracking-widest">{trip.duration}天深度探索之旅</p>
@@ -722,14 +798,22 @@ const ReorderModal = ({
 };
 
 const TransportRow = ({ 
-  transport
+  transport,
+  distanceKm
 }: { 
   transport?: { mode: string; duration: string; description: string };
+  distanceKm: number | null;
 }) => {
   const [expanded, setExpanded] = useState(false);
   if (!transport) return null;
 
   const Icon = transport.mode === 'walk' ? Footprints : transport.mode === 'taxi' ? Car : Train;
+
+  const distColor =
+    distanceKm === null ? '' :
+    distanceKm < 10 ? 'text-green-600' :
+    distanceKm < 30 ? 'text-yellow-600' :
+                      'text-red-600';
 
   return (
     <div 
@@ -747,15 +831,75 @@ const TransportRow = ({
         <span className="text-gray-300 text-[10px]">{expanded ? '▲' : '▼'}</span>
       </div>
 
-      {/* 展开态：完整信息 */}
+      {/* 展开态：交通描述 + 距离 */}
       {expanded && (
-        <div className="mt-2 pl-1 text-[11px] text-gray-500">
-          {transport.description}
+        <div className="mt-2 space-y-1.5">
+          <div className={`pl-1 text-[11px] ${transport.description?.startsWith('⚠️') ? 'text-red-500 font-bold' : 'text-gray-500'}`}>
+            {transport.description}
+          </div>
+          {distanceKm !== null && (
+            <div className={`flex items-center gap-1 pl-1 text-[10px] font-bold ${distColor}`}>
+              <MapPin size={10} />
+              距下个景点 {distanceKm}km{distanceKm >= 30 ? ' ⚠️' : ''}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 };
+
+/** 计算两点间的大圆距离（Haversine 公式） */
+function haversineKm(
+  a: { lat: number; lng: number } | undefined,
+  b: { lat: number; lng: number } | undefined
+): number | null {
+  if (!a || !b) return null;
+  const R = 6371; // 地球半径 km
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const h =
+    sinDLat * sinDLat +
+    Math.cos((a.lat * Math.PI) / 180) *
+      Math.cos((b.lat * Math.PI) / 180) *
+      sinDLng * sinDLng;
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)));
+}
+
+/** 最近邻算法重排同天景点，使路线更顺路（不绕路） */
+function optimizeDayRoute(places: Place[]): Place[] {
+  const withCoords = places.filter((p) => p.coordinates);
+  if (withCoords.length < 2) return places;
+
+  // 从第一个有坐标的景点出发，贪心选择最近的下一个
+  const sorted: Place[] = [];
+  let remaining = [...withCoords];
+  let current = remaining.shift()!;
+  sorted.push(current);
+
+  while (remaining.length > 0) {
+    let nearestIdx = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const d = haversineKm(current.coordinates, remaining[i].coordinates);
+      if (d !== null && d < minDist) {
+        minDist = d;
+        nearestIdx = i;
+      }
+    }
+    current = remaining.splice(nearestIdx, 1)[0];
+    sorted.push(current);
+  }
+
+  // 无坐标的按原始顺序追加到末尾
+  const noCoords = places.filter((p) => !p.coordinates);
+  return [...sorted, ...noCoords].map((p, i, arr) => ({
+    ...p,
+    transportToNext: i < arr.length - 1 ? p.transportToNext : undefined,
+  }));
+}
 
 const PlaceCard = ({ 
   place, 
@@ -854,6 +998,112 @@ export const PlannerView = ({
   const [areaRecommendations, setAreaRecommendations] = useState<{ area: string; reason: string; pros: string; cons: string }[]>([]);
   const [areaRecommendationsLoading, setAreaRecommendationsLoading] = useState(false);
 
+  // 地理编码起止点坐标（用于距离计算）
+  const [startCoord, setStartCoord] = useState<[number, number] | null>(null);
+  const [endCoord, setEndCoord] = useState<[number, number] | null>(null);
+  const [startRoute, setStartRoute] = useState<{ mode: string; duration: string; description: string } | null>(null);
+  const [endRoute, setEndRoute] = useState<{ mode: string; duration: string; description: string } | null>(null);
+
+  /** 调用高德路径规划 API，返回交通信息（优先公共交通，兜底驾车） */
+  const fetchAmapRoute = async (origin: [number, number], dest: [number, number], city: string) => {
+    const restKey = (import.meta as any).env.VITE_AMAP_REST_API_KEY || (import.meta as any).env.VITE_AMAP_API_KEY || 'c307f0eba5e63f4c4dfba0b9c4838655';
+    const fmt = (p: [number, number]) => `${p[0]},${p[1]}`;
+    // 尝试公共交通路线
+    let best: { mode: string; duration: string; description: string } | null = null;
+    try {
+      const transitUrl = `https://restapi.amap.com/v3/direction/transit/integrated?key=${restKey}&origin=${fmt(origin)}&destination=${fmt(dest)}&city=${encodeURIComponent(city)}&alternative=1`;
+      const tres = await fetch(transitUrl);
+      const tdata = await tres.json();
+      if (tdata.status === '1' && tdata.route?.transits?.length > 0) {
+        const t = tdata.route.transits[0];
+        const durMin = Math.ceil((t.duration || 0) / 60);
+        const distKm = Math.round((t.distance || 0) / 1000);
+        // 找出公共交通段标注方式
+        const hasMetro = t.segments?.some((s: any) => s.bus?.buslines?.[0]?.type === 1);
+        const hasBus = !hasMetro && t.segments?.some((s: any) => s.bus?.buslines?.length > 0);
+        const mode = hasMetro ? 'subway' : hasBus ? 'bus' : 'taxi';
+        let desc = '';
+        if (hasMetro || hasBus) {
+          const lines: string[] = [];
+          for (const seg of t.segments || []) {
+            if (seg.bus?.buslines?.[0]) {
+              lines.push(seg.bus.buslines[0].name);
+            }
+          }
+          desc = `乘坐 ${lines.join(' → ')}（含步行约${Math.round((t.walking_distance || 0) / 1000 * 10) / 10}km）`;
+        } else {
+          desc = `公共交通预估约${durMin}分钟`;
+        }
+        best = { mode, duration: `约${durMin}分钟`, description: desc };
+      }
+    } catch {}
+    // 兜底驾车路线
+    if (!best) {
+      try {
+        const driveUrl = `https://restapi.amap.com/v3/direction/driving?key=${restKey}&origin=${fmt(origin)}&destination=${fmt(dest)}&strategy=0`;
+        const dres = await fetch(driveUrl);
+        const ddata = await dres.json();
+        if (ddata.status === '1' && ddata.route?.paths?.length > 0) {
+          const p = ddata.route.paths[0];
+          const durMin = Math.ceil((p.duration || 0) / 60);
+          const distKm = Math.round((p.distance || 0) / 1000);
+          best = { mode: 'taxi', duration: `约${durMin}分钟`, description: `驾车约${distKm}km，预计${durMin}分钟` };
+        }
+      } catch {}
+    }
+    return best;
+  };
+
+  useEffect(() => {
+    if (!trip) return;
+    let cancelled = false;
+    const apiKey = (import.meta as any).env.VITE_AMAP_API_KEY || 'c307f0eba5e63f4c4dfba0b9c4838655';
+    const restKey = (import.meta as any).env.VITE_AMAP_REST_API_KEY || apiKey;
+    const geocode = async (addr: string): Promise<[number, number] | null> => {
+      const url = `https://restapi.amap.com/v3/geocode/geo?key=${restKey}&address=${encodeURIComponent(addr)}${trip.destination ? `&city=${encodeURIComponent(trip.destination)}` : ''}`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.status === '1' && data.geocodes?.length > 0) {
+          const p = data.geocodes[0].location.split(',').map(Number);
+          if (p.length === 2 && !isNaN(p[0]) && !isNaN(p[1])) return [p[0], p[1]];
+        }
+      } catch {}
+      return null;
+    };
+    Promise.all([
+      trip.startPoint ? geocode(trip.startPoint) : Promise.resolve(null),
+      trip.endPoint ? geocode(trip.endPoint) : Promise.resolve(null),
+    ]).then(async ([s, e]) => {
+      if (cancelled) return;
+      setStartCoord(s);
+      setEndCoord(e);
+    });
+    return () => { cancelled = true; };
+  }, [trip?.startPoint, trip?.endPoint, trip?.destination]);
+
+  // 坐标到位后，根据当前 activeDay 查高德路径规划
+  useEffect(() => {
+    if (!trip || !startCoord || !endCoord) return;
+    const city = trip.destination || '';
+    const day = trip.days[activeDay];
+    if (!day || day.places.length === 0) return;
+    let cancelled = false;
+    const first = day.places[0];
+    const last = day.places[day.places.length - 1];
+    const fLng = first.coordinates?.lng;
+    const fLat = first.coordinates?.lat;
+    const lLng = last.coordinates?.lng;
+    const lLat = last.coordinates?.lat;
+    Promise.all([
+      startCoord && fLng && fLat ? fetchAmapRoute(startCoord, [fLng, fLat], city) : null,
+      endCoord && lLng && lLat ? fetchAmapRoute([lLng, lLat], endCoord, city) : null,
+    ]).then(([sr, er]) => {
+      if (!cancelled) { setStartRoute(sr); setEndRoute(er); }
+    });
+    return () => { cancelled = true; };
+  }, [trip, activeDay, startCoord, endCoord]);
+
   // 同步 trip 变更回父组件（App.tsx）和 localStorage
   const commitTrip = (updatedTrip: Trip) => {
     setTrip(updatedTrip);
@@ -878,7 +1128,16 @@ export const PlannerView = ({
 
   // Sync with prop if it changes (e.g. newly generated)
   React.useEffect(() => {
-    setTrip(initialTrip);
+    if (!initialTrip) return;
+    // P2: 重排同天景点使路线更顺路
+    const optimized = {
+      ...initialTrip,
+      days: initialTrip.days.map((day) => ({
+        ...day,
+        places: optimizeDayRoute(day.places),
+      })),
+    };
+    setTrip(optimized);
   }, [initialTrip]);
 
   if (!trip) return (
@@ -1088,11 +1347,40 @@ export const PlannerView = ({
 
       {/* 当日路线地图 — 左右比地点卡片各宽 6px */}
       <div className="mx-[22px] pt-2">
-        <AMapRouteStatic places={trip.days[activeDay].places} />
+        <AMapRouteStatic places={trip.days[activeDay].places} startCoord={startCoord} endCoord={endCoord} />
       </div>
 
       {/* Place List */}
       <div className="px-8 py-8 space-y-2">
+        {/* 每日起点卡片 */}
+        {trip.startPoint && (
+          <div>
+            <div className="bg-gray-50 rounded-2xl border border-gray-200 px-5 py-3 text-sm">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
+                  <MapPin size={12} className="text-gray-500" />
+                </div>
+                <div>
+                  <span className="font-bold text-[#1A1A1A]">{trip.startPoint}</span>
+                  <span className="text-gray-400 ml-2">每日起点</span>
+                </div>
+              </div>
+            </div>
+            {/* 起点 → 第一个景点交通信息（高德 API 实时规划） */}
+            {trip.days[activeDay].places.length > 0 && (() => {
+              const first = trip.days[activeDay].places[0];
+              const dist = startCoord && first.coordinates
+                ? haversineKm({ lat: startCoord[1], lng: startCoord[0] }, first.coordinates) : null;
+              return (
+                <TransportRow 
+                  transport={startRoute || undefined}
+                  distanceKm={dist}
+                />
+              );
+            })()}
+          </div>
+        )}
+
         {trip.days[activeDay].places.map((place, idx, arr) => (
           <React.Fragment key={place.id}>
             <PlaceCard 
@@ -1105,10 +1393,37 @@ export const PlannerView = ({
             {idx < arr.length - 1 && (
               <TransportRow 
                 transport={place.transportToNext} 
+                distanceKm={haversineKm(place.coordinates, arr[idx + 1].coordinates)}
               />
             )}
           </React.Fragment>
         ))}
+
+        {/* 最后一个景点 → 终点交通信息（高德 API 实时规划）+ 每日终点卡片 */}
+        {trip.endPoint && trip.days[activeDay].places.length > 0 && (() => {
+          const last = trip.days[activeDay].places[trip.days[activeDay].places.length - 1];
+          const dist = endCoord && last.coordinates
+            ? haversineKm(last.coordinates, { lat: endCoord[1], lng: endCoord[0] }) : null;
+          return (
+            <div>
+              <TransportRow 
+                transport={endRoute || undefined}
+                distanceKm={dist}
+              />
+              <div className="bg-gray-50 rounded-2xl border border-gray-200 px-5 py-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-gray-200 rounded-full flex items-center justify-center flex-shrink-0">
+                    <MapPin size={12} className="text-gray-500" />
+                  </div>
+                  <div>
+                    <span className="font-bold text-[#1A1A1A]">{trip.endPoint}</span>
+                    <span className="text-gray-400 ml-2">每日终点</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Share Modal */}

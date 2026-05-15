@@ -1,8 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Send, Sparkles, History, MapPin, Check, X, Clock, Calendar, ListOrdered } from 'lucide-react';
-import { generateTrip } from '../services/deepSeekService';
+import { Send, Sparkles, History, MapPin, Check, X, Clock, Calendar, ListOrdered, AlertTriangle } from 'lucide-react';
+import { generateTrip, modifyTrip, analyzeIntent } from '../services/deepSeekService';
 import { Trip, UserPreferences } from '../types';
+
+/** 计算两点间的大圆距离（Haversine 公式） */
+function haversineKm(a?: { lat: number; lng: number }, b?: { lat: number; lng: number }): number | null {
+  if (!a || !b) return null;
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  return Math.round(R * 2 * Math.atan2(
+    Math.sqrt(sinDLat * sinDLat + Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * sinDLng * sinDLng),
+    Math.sqrt(1 - (sinDLat * sinDLat + Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * sinDLng * sinDLng))
+  ));
+}
+
+/** 检查行程中是否有距离过远的景点对 */
+function findFarDistances(trip: Trip): { day: number; from: string; to: string; km: number }[] {
+  const warnings: { day: number; from: string; to: string; km: number }[] = [];
+  trip.days.forEach((day) => {
+    for (let i = 0; i < day.places.length - 1; i++) {
+      const a = day.places[i].coordinates;
+      const b = day.places[i + 1].coordinates;
+      const km = haversineKm(a, b);
+      if (km !== null && km > 30) {
+        warnings.push({ day: day.day, from: day.places[i].name, to: day.places[i + 1].name, km });
+      }
+    }
+  });
+  return warnings;
+}
 import { LocationInfo } from '../services/locationService';
 
 interface Message {
@@ -19,6 +49,9 @@ interface TripFormData {
   placesPerDay: number;
   startTime: string;
   endTime: string;
+  startDate: string;
+  startPoint: string;
+  endPoint: string;
 }
 
 /** 本地解析用户输入，提取行程信息 */
@@ -31,23 +64,31 @@ function parseTripInput(input: string): Partial<TripFormData> {
     result.destination = destMatch[1];
   } else {
     // 去掉数字和常见词，剩下的可能就是目的地
-    const clean = input.replace(/(\d+\s*天|\d+\s*日\s*游|\d+\s*个\s*景点?|每天\s*\d+|出发|开始|规划)/g, '').trim();
+    const clean = input.replace(/(\d+\s*天|\d+\s*日\s*游|[一二三四五六七八九十]+\s*日\s*游|[一二三四五六七八九十]+\s*天|\d+\s*个\s*景点?|每天\s*\d+|出发|开始|规划)/g, '').trim();
     const cityMatch = clean.match(/([\u4e00-\u9fff]{2,4})/);
     if (cityMatch) {
       result.destination = cityMatch[1];
     }
   }
 
-  // 天数
-  const dayMatch = input.match(/(\d+)\s*天/);
+  const chineseNumMap: Record<string, number> = { '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+
+  // 天数（支持中文数字：一日、两天、三日游）
+  const dayMatch = input.match(/(\d+)\s*天|([一两三四五六七八九十])\s*天|(\d+)\s*日\s*游|([一二三四五六七八九十])\s*日\s*游/);
   if (dayMatch) {
-    result.days = parseInt(dayMatch[1]);
+    if (dayMatch[1]) result.days = parseInt(dayMatch[1]);
+    else if (dayMatch[2]) result.days = chineseNumMap[dayMatch[2]] || 1;
+    else if (dayMatch[3]) result.days = parseInt(dayMatch[3]);
+    else if (dayMatch[4]) result.days = chineseNumMap[dayMatch[4]] || 1;
   }
 
-  // 每日景点数
-  const placesMatch = input.match(/(?:每天|每日)\s*(\d+)\s*个|(\d+)\s*个\s*(?:景点|地方)/);
+  // 每日景点数（支持中文数字：两个景点、三个地方）
+  const placesMatch = input.match(/(?:每天|每日)\s*(\d+)\s*个|(\d+)\s*个\s*(?:景点|地方)|([一两三四五六七八九十])\s*个\s*(?:景点|地方)|每[天日]\s*([一两三四五六七八九十])\s*个/);
   if (placesMatch) {
-    result.placesPerDay = parseInt(placesMatch[1] || placesMatch[2]);
+    if (placesMatch[1]) result.placesPerDay = parseInt(placesMatch[1]);
+    else if (placesMatch[2]) result.placesPerDay = parseInt(placesMatch[2]);
+    else if (placesMatch[3]) result.placesPerDay = chineseNumMap[placesMatch[3]] || 3;
+    else if (placesMatch[4]) result.placesPerDay = chineseNumMap[placesMatch[4]] || 3;
   }
 
   // 开始时间
@@ -82,17 +123,22 @@ function parseTripInput(input: string): Partial<TripFormData> {
 
 /** 检查信息是否完整 */
 function isFormComplete(data: Partial<TripFormData>): boolean {
-  return !!(data.destination && data.days && data.placesPerDay && data.startTime && data.endTime);
+  return !!(data.destination && data.days && data.placesPerDay && data.startTime && data.endTime && data.startDate);
 }
 
 /** 填充默认值 */
 function fillDefaults(data: Partial<TripFormData>): TripFormData {
+  const today = new Date();
+  const defaultDate = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
   return {
     destination: data.destination || '',
     days: data.days || 3,
     placesPerDay: data.placesPerDay || 4,
     startTime: data.startTime || '09:00',
     endTime: data.endTime || '18:00',
+    startDate: data.startDate || defaultDate,
+    startPoint: data.startPoint || '',
+    endPoint: data.endPoint || '',
   };
 }
 
@@ -137,14 +183,41 @@ export const HomeView = ({
   const [messages, setMessages] = useState<Message[]>(loadMessages);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState<TripFormData>({ destination: '', days: 3, placesPerDay: 4, startTime: '09:00', endTime: '18:00' });
+  const [formData, setFormData] = useState<TripFormData>({ destination: '', days: 3, placesPerDay: 4, startTime: '09:00', endTime: '18:00', startDate: new Date().toISOString().slice(0, 10), startPoint: '', endPoint: '' });
   const [latestUserInput, setLatestUserInput] = useState('');
+  const [distanceWarning, setDistanceWarning] = useState<{ trip: Trip; warnings: { day: number; from: string; to: string; km: number }[] } | null>(null);
+  const [showCleanup, setShowCleanup] = useState(false);
+  const cleanupDismissedCount = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // 保存对话历史到 localStorage
   useEffect(() => {
     localStorage.setItem('chat_history', JSON.stringify(messages));
   }, [messages]);
+
+  // 检测对话数量，提示清理
+  useEffect(() => {
+    const totalMsgs = messages.length;
+    if (totalMsgs > 20 && !showCleanup) {
+      // 上次忽略后又增加了 10 条再提醒
+      const sinceDismiss = totalMsgs - 20 - cleanupDismissedCount.current * 10;
+      if (sinceDismiss >= 10) {
+        setShowCleanup(true);
+      }
+    }
+  }, [messages.length, showCleanup]);
+
+  const handleCleanup = (keepCount: number) => {
+    const keep = messages.slice(-keepCount);
+    setMessages(keep);
+    setShowCleanup(false);
+    cleanupDismissedCount.current = 0;
+  };
+
+  const handleDismissCleanup = () => {
+    setShowCleanup(false);
+    cleanupDismissedCount.current += 1;
+  };
 
   // 滚动到底部
   useEffect(() => {
@@ -158,34 +231,45 @@ export const HomeView = ({
     setShowForm(false);
 
     try {
-      // 构建对话历史
-      const conversationHistory = convHistory.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
-      
-      // 构造带有完整信息的 prompt
-      const fullPrompt = `${userInput}（行程要求：${form.destination}，${form.days}天，每天${form.placesPerDay}个景点，${form.startTime}开始，${form.endTime}结束）`;
+      const conversationHistory = convHistory.slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
+      const promptParts = [
+        `${userInput}（行程要求：${form.destination}，${form.days}天`,
+        `${form.startDate}出发`,
+        `每天${form.placesPerDay}个景点`,
+        `${form.startTime}开始，${form.endTime}结束`,
+      ];
+      if (form.startPoint) promptParts.push(`每日起点：${form.startPoint}`);
+      if (form.endPoint) promptParts.push(`每日终点：${form.endPoint}`);
+      const fullPrompt = promptParts.join('，') + '）';
 
-      if (hasExistingTrip) {
-        const trip = await generateTrip(fullPrompt, preferences, conversationHistory);
+      const trip = await generateTrip(fullPrompt, preferences, conversationHistory);
+      trip.startPoint = form.startPoint || undefined;
+      trip.endPoint = form.endPoint || undefined;
+      const warnings = findFarDistances(trip);
+
+      if (warnings.length > 0) {
+        setDistanceWarning({ trip, warnings });
+      } else if (hasExistingTrip) {
         const assistantMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
           content: `我为你规划了一个新的 ${trip.destination} ${trip.duration} 天行程，要替换当前行程吗？`,
-          trip,
+          trip: { ...trip, startDate: form.startDate },
           isPreview: true
         };
         setMessages(prev => [...prev, assistantMsg]);
       } else {
-        const trip = await generateTrip(fullPrompt, preferences, conversationHistory);
+        const tripWithDate = { ...trip, startDate: form.startDate };
         const assistantMsg: Message = {
           id: (Date.now() + 1).toString(),
           role: 'assistant',
-          content: `太棒了！我已经为你规划好了前往 ${trip.destination} 的 ${trip.duration} 天行程。`,
-          trip,
+          content: `太棒了！我已经为你规划好了前往 ${tripWithDate.destination} 的 ${tripWithDate.duration} 天行程。`,
+          trip: tripWithDate,
           isPreview: false
         };
         setMessages(prev => [...prev, assistantMsg]);
-        onTripGenerated(trip);
-        localStorage.setItem('current_trip', JSON.stringify(trip));
+        onTripGenerated(tripWithDate);
+        localStorage.setItem('current_trip', JSON.stringify(tripWithDate));
       }
     } catch (error) {
       console.error(error);
@@ -193,6 +277,154 @@ export const HomeView = ({
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: '抱歉，规划行程时出了一点小问题。请再试一次。'
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** 用户选择了继续使用（忽略距离警告） */
+  const confirmFarTrip = () => {
+    if (!distanceWarning) return;
+    const { trip } = distanceWarning;
+    const startDate = trip.startDate || new Date().toISOString().slice(0, 10);
+    setDistanceWarning(null);
+
+    if (hasExistingTrip) {
+      const msg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `我为你规划了一个新的 ${trip.destination} ${trip.duration} 天行程，要替换当前行程吗？`,
+        trip: { ...trip, startDate },
+        isPreview: true,
+      };
+      setMessages(prev => [...prev, msg]);
+    } else {
+      const tripWithDate = { ...trip, startDate };
+      const msg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `太棒了！我已经为你规划好了前往 ${tripWithDate.destination} 的 ${tripWithDate.duration} 天行程。`,
+        trip: tripWithDate,
+        isPreview: false,
+      };
+      setMessages(prev => [...prev, msg]);
+      onTripGenerated(tripWithDate);
+      localStorage.setItem('current_trip', JSON.stringify(tripWithDate));
+    }
+  };
+
+  /** 用户要求重新规划（避开远距离景点对） */
+  const regenerateWithWarning = async () => {
+    if (!distanceWarning) return;
+    const { trip, warnings } = distanceWarning;
+    setDistanceWarning(null);
+
+    // 把距离警告作为约束发给 AI 重新生成
+    const constraintText = warnings
+      .map(w => `第${w.day}天的"${w.from}"和"${w.to}"相距${w.km}km，请将它们分到不同天或替换成更近的景点。`)
+      .join('；');
+    const retryPrompt = `刚才的方案存在距离问题：${constraintText}。请重新规划，确保同一天景点在同一区域。目的地：${trip.destination}，${trip.duration}天。`;
+
+    setLoading(true);
+    try {
+      const convHistory = messages.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
+      const newTrip = await generateTrip(retryPrompt, preferences, [...convHistory, `User: ${retryPrompt}`]);
+      const newWarnings = findFarDistances(newTrip);
+
+      if (newWarnings.length > 0) {
+        // 还有警告，再次展示（最多提示一次后直接出结果避免死循环） */
+        setDistanceWarning({ trip: newTrip, warnings: newWarnings });
+      } else if (hasExistingTrip) {
+        setMessages(prev => [...prev, {
+          id: (Date.now() + 1).toString(), role: 'assistant',
+          content: `我重新规划了一个新的 ${newTrip.destination} ${newTrip.duration} 天行程，要替换当前行程吗？`,
+          trip: { ...newTrip, startDate: trip.startDate || new Date().toISOString().slice(0, 10) }, isPreview: true,
+        }]);
+      } else {
+        const tripWithDate = { ...newTrip, startDate: trip.startDate || new Date().toISOString().slice(0, 10) };
+        setMessages(prev => [...prev, {
+          id: (Date.now() + 1).toString(), role: 'assistant',
+          content: `重新规划好了！前往 ${newTrip.destination} 的 ${newTrip.duration} 天行程。`,
+          trip: tripWithDate, isPreview: false,
+        }]);
+        onTripGenerated(tripWithDate);
+        localStorage.setItem('current_trip', JSON.stringify(tripWithDate));
+      }
+    } catch {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(), role: 'assistant',
+        content: '重新规划时出了点问题，这是原始方案，你看看能不能接受？',
+        trip: { ...trip, startDate: trip.startDate || new Date().toISOString().slice(0, 10) }, isPreview: hasExistingTrip,
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** 判断用户输入是否为行程修改意图（而非新一轮规划） */
+  const isModificationIntent = (input: string, hasCurrentTrip: boolean): boolean => {
+    if (!hasCurrentTrip) return false;
+
+    // 修改关键词
+    const modifyVerbs = /修改|调整|更改|改[了一成]?下?|换[掉了一个成]?|替换|重新安排|重新规划|重新调整/;
+    const targets = /第[一二三四五六七八九十\d]+天|行程|路线|路线安排|景点安排|当日行程|当天安排|景点|安排/;
+
+    // 第一种："修改第X天" / "调整行程" / "换掉XX景点"
+    if (modifyVerbs.test(input) && targets.test(input)) return true;
+
+    // 第二种："改一下" / "改成" / "换成" + 行程/路线/景点
+    if (/改[了一成]?下?/.test(input) && /行程|路线|景点|安排/.test(input)) return true;
+    if (/换[了一个成]?/.test(input) && /行程|路线|景点|安排/.test(input)) return true;
+    // "调整X个景点"
+    if (/调整\s*\d+\s*个/.test(input)) return true;
+
+    // 第三种："把X改成/换成Y" — 典型修改模式，无需指定目标词
+    if (/把\s*\S{2,}\s*(改成|换成)/.test(input)) return true;
+    if (/\S{2,}\s*(改成|换成)\s*\S{2,}/.test(input)) return true;
+
+    // 第四种：住宿相关修改
+    if (/住(在)?\s*\S{2,}\s*(附近|这边?)/.test(input) && /调整|修改|改|换|重新/.test(input)) return true;
+    if (/住宿|酒店|民宿/.test(input) && /调整|修改|改|换|重新/.test(input)) return true;
+
+    // 第五种：针对某天的具体微调
+    if (/(第[一二三四五六七八九十\d]+天|明天|后天|今天).{0,8}(加[一]?[个座]?|去掉|删除|换[成掉]?)/.test(input)) return true;
+    if (/(加[一]?[个座]?|去掉|删除|换[成掉]?|增加|减少).{0,8}(第[一二三四五六七八九十\d]+天|景点|行程)/.test(input)) return true;
+
+    return false;
+  };
+
+  /** 处理行程修改请求 */
+  const handleModifyTrip = async (userInput: string, existingTrip: Trip, allMessages: Message[]) => {
+    setLoading(true);
+
+    try {
+      // 如果用户没指定第几天，默认改第一天
+      const hasDaySpecified = /第[一二三四五六七八九十\d]+天/.test(userInput);
+      const modifyInput = hasDaySpecified ? userInput : `调整第1天。${userInput}`;
+
+      const convHistory = allMessages
+        .filter(m => !m.trip || m.trip.destination === existingTrip.destination)
+        .slice(-5)
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`);
+      const modifiedTrip = await modifyTrip(existingTrip, modifyInput, convHistory);
+      const tripWithDate = { ...modifiedTrip, startDate: existingTrip.startDate || new Date().toISOString().slice(0, 10), startPoint: modifiedTrip.startPoint || existingTrip.startPoint, endPoint: modifiedTrip.endPoint || existingTrip.endPoint };
+
+      const assistantMsg: Message = {
+        id: (Date.now() + 2).toString(),
+        role: 'assistant',
+        content: `已根据你的要求调整了行程 ✨`,
+        trip: tripWithDate,
+        isPreview: true,
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+      onTripGenerated(tripWithDate);
+      localStorage.setItem('current_trip', JSON.stringify(tripWithDate));
+    } catch {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 2).toString(),
+        role: 'assistant',
+        content: '修改行程时出了点问题，请再试一次。'
       }]);
     } finally {
       setLoading(false);
@@ -213,8 +445,57 @@ export const HomeView = ({
     // 判断是否已有行程（消息中有 trip 对象或 hasExistingTrip）
     var hasTrip = hasExistingTrip || messages.some(function (m) { return !!m.trip; });
 
+    // ⭐ 行程修改检测：有当前行程 + 修改意图 → 走修改流程（不触发表单/不重新规划整段）
+    var currentTrip: Trip | null = existingTrip || null;
+    if (!currentTrip && hasTrip) {
+      for (var mt = messages.length - 1; mt >= 0; mt--) {
+        if (messages[mt].trip) { currentTrip = messages[mt].trip || null; break; }
+      }
+    }
+    if (hasTrip && currentTrip && isModificationIntent(userInput, true)) {
+      await handleModifyTrip(userInput, currentTrip, updatedMessages);
+      return;
+    }
+
+    // ⭐ 正则没匹配上时，用 AI 兜底分析，防止遗漏模糊修改意图
+    // 但如果解析输入已发现明确的新目的地（与当前行程不同），跳过 AI 分析直接弹表单
+    var isAIModification = false;
+    var parsedPre = parseTripInput(userInput);
+    var hasNewDestPre = !!(parsedPre.destination && parsedPre.destination.length >= 2 && 
+      parsedPre.destination !== (currentTrip && currentTrip.destination));
+    if (hasTrip && currentTrip && !isModificationIntent(userInput, true) && !hasNewDestPre) {
+      try {
+        const historyTexts = updatedMessages
+          .filter(m => !m.trip || m.trip.destination === currentTrip.destination)
+          .slice(-3)
+          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content || ''}`);
+        const intent = await analyzeIntent(userInput, historyTexts);
+        isAIModification = intent.isModification;
+      } catch {
+        // AI 分析失败则静默回退到常规流程
+      }
+    }
+    if (isAIModification && currentTrip) {
+      await handleModifyTrip(userInput, currentTrip, updatedMessages);
+      return;
+    }
+
     // 本地解析输入
     var parsed = parseTripInput(userInput);
+    
+    // ⭐ 非修改、无旅行信息 → 纯闲聊/无关话题，不触发任何规划
+    var hasValidDest = !!parsed.destination && !/今天|明天|昨天|天气|你好|谢谢|请问|哈哈|哈哈|嗯好|好的|知道|随便/.test(parsed.destination);
+    var hasAnyTravelInfo = hasValidDest || !!parsed.days || !!parsed.placesPerDay || !!parsed.startTime || !!parsed.endTime;
+    if (!hasAnyTravelInfo) {
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 2).toString(),
+        role: 'assistant',
+        content: '我是旅游规划助手，可以帮你规划行程。想去哪里玩？告诉我目的地和天数就行 😊'
+      }]);
+      return;
+    }
+
+    // 已存在行程且输入没有明确的新目的地 → 追问模式，跳过表单
     
     // 已存在行程且输入没有明确的新目的地 → 追问模式，跳过表单
     var hasNewDest = !!(parsed.destination && parsed.destination.length >= 2);
@@ -236,6 +517,9 @@ export const HomeView = ({
         placesPerDay: parsed.placesPerDay || 4,
         startTime: parsed.startTime || '09:00',
         endTime: parsed.endTime || '18:00',
+        startDate: parsed.startDate || new Date().toISOString().slice(0, 10),
+        startPoint: '',
+        endPoint: '',
       };
       await handleGenerateTrip(mergeForm, userInput, updatedMessages);
       return;
@@ -271,6 +555,33 @@ export const HomeView = ({
         className="flex-1 overflow-y-auto px-6 py-6 pb-44 space-y-6 scroll-smooth"
       >
         <AnimatePresence initial={false}>
+          {showCleanup && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="flex items-center justify-between gap-3 bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3"
+            >
+              <div className="flex items-center gap-2 text-[12px] text-yellow-700">
+                <History size={14} />
+                <span>对话已有 <strong>{messages.length}</strong> 条记录</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleCleanup(20)}
+                  className="text-[11px] bg-yellow-600 text-white px-3 py-1.5 rounded-lg font-bold hover:bg-yellow-700 transition-colors"
+                >
+                  清理（保留最近20条）
+                </button>
+                <button
+                  onClick={handleDismissCleanup}
+                  className="text-[11px] text-yellow-500 px-2 py-1.5 rounded-lg hover:bg-yellow-100 transition-colors"
+                >
+                  暂不
+                </button>
+              </div>
+            </motion.div>
+          )}
           {messages.map((msg) => (
             <motion.div
               key={msg.id}
@@ -372,6 +683,28 @@ export const HomeView = ({
                   />
                 </div>
 
+                {/* 出发日期 */}
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                    <Calendar size={12} /> 出发日期
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.startDate}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace(/[^0-9]/g, '');
+                      let formatted = raw;
+                      if (raw.length > 4) formatted = raw.slice(0, 4) + '-' + raw.slice(4);
+                      if (raw.length > 6) formatted = formatted.slice(0, 7) + '-' + formatted.slice(7);
+                      if (formatted.length > 10) formatted = formatted.slice(0, 10);
+                      setFormData({ ...formData, startDate: formatted });
+                    }}
+                    placeholder="2026-05-15"
+                    inputMode="numeric"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-[#1A1A1A] focus:outline-none focus:border-blue-400 focus:bg-white transition-all"
+                  />
+                </div>
+
                 {/* 第一行：天数 / 景点数 */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
@@ -465,6 +798,36 @@ export const HomeView = ({
                   </div>
                 </div>
 
+                {/* 每日起止点（选填） */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                      <MapPin size={12} /> 每日起点 <span className="text-blue-400 font-bold text-[10px]">选填</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.startPoint}
+                      onChange={(e) => setFormData(prev => ({ ...prev, startPoint: e.target.value, endPoint: prev.endPoint || e.target.value }))}
+                      placeholder="如：酒店名称或地址"
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-[#1A1A1A] focus:outline-none focus:border-blue-400 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                      <MapPin size={12} /> 每日终点 <span className="text-blue-400 font-bold text-[10px]">选填</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.endPoint}
+                      onChange={(e) => {
+                        setFormData(prev => ({ ...prev, endPoint: e.target.value }));
+                      }}
+                      placeholder="如：酒店名称或地址"
+                      className="w-full bg-gray-50 border border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-[#1A1A1A] focus:outline-none focus:border-blue-400 focus:bg-white transition-all"
+                    />
+                  </div>
+                </div>
+
                 {/* Submit button */}
                 <button
                   onClick={handleFormSubmit}
@@ -502,6 +865,52 @@ export const HomeView = ({
           )}
         </AnimatePresence>
       </div>
+
+      {/* 距离警告弹窗 */}
+      <AnimatePresence>
+        {distanceWarning && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="fixed left-1/2 -translate-x-1/2 bottom-28 z-40 w-full max-w-md px-6"
+          >
+            <div className="bg-white rounded-2xl border border-orange-200 shadow-lg p-5 space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-full bg-orange-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <AlertTriangle size={18} className="text-orange-500" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-sm font-bold text-[#1A1A1A]">距离较远，确认一下？</h4>
+                  <div className="mt-2 space-y-1">
+                    {distanceWarning.warnings.map((w, i) => (
+                      <p key={i} className="text-[11px] text-gray-500 leading-relaxed">
+                        <span className="font-bold text-orange-600">第{w.day}天</span> 「{w.from}」到「{w.to}」
+                        <span className="font-bold text-orange-600"> 约{w.km}km</span>
+                      </p>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-2">距离较远可能影响行程节奏，是否重新规划？</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={confirmFarTrip}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-gray-500 bg-gray-50 border border-gray-200 hover:bg-gray-100 transition-colors"
+                >
+                  继续使用
+                </button>
+                <button
+                  onClick={regenerateWithWarning}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-orange-500 hover:bg-orange-600 transition-colors"
+                >
+                  换掉远距离景点
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Input Area — 固定在底部（白色底板延伸到 nav，防止镂空漏出） */}
       <div className="fixed left-1/2 -translate-x-1/2 bottom-0 z-30 w-full max-w-md bg-white">
